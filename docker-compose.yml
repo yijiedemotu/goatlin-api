@@ -1,0 +1,55 @@
+# 本地一键起 PostgreSQL + Redis + API，用于验证「生产形态」下的行为：
+# - 换掉 SQLite，验证 ORM 在真实数据库上的表现；
+# - 打开 Redis 限流，验证多实例共享配额。
+# 用法：docker compose up --build -d && docker compose logs -f api
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: goalfin
+      POSTGRES_PASSWORD: goalfin
+      POSTGRES_DB: goalfin
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goalfin -d goalfin"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      # 生产必须替换成随机值：python -c "import secrets;print(secrets.token_urlsafe(48))"
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-32-bytes-minimum-secret}
+      DATABASE_URL: postgresql+asyncpg://goalfin:goalfin@db:5432/goalfin
+      REDIS_URL: redis://redis:6379/0
+      LOG_FORMAT: json
+      CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
